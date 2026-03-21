@@ -3,70 +3,73 @@ const fs = require("fs");
 
 const PLACE_ID = 2753915549;
 
-function sleep(ms) {
-    return new Promise(r => setTimeout(r, ms));
-}
+let usedServers = new Set();
 
-// fetch an toàn
-async function fetchServer() {
-    const url = `https://games.roblox.com/v1/games/${PLACE_ID}/servers/Public?limit=100`;
+async function scanServers() {
+    let cursor = "";
+    let servers = [];
 
-    for (let i = 0; i < 5; i++) {
-        try {
-            const res = await axios.get(url, {
-                timeout: 5000,
-                headers: {
-                    "User-Agent": "Mozilla/5.0"
-                }
-            });
+    console.log("🔍 Đang scan server...");
 
-            return res.data;
+    try {
+        for (let i = 0; i < 15; i++) {
+            const url = `https://games.roblox.com/v1/games/${PLACE_ID}/servers/Public?limit=100&cursor=${cursor}`;
+            
+            const res = await axios.get(url);
+            const data = res.data;
 
-        } catch (err) {
-            console.log(`⚠️ Lỗi request (${i + 1})`);
+            if (!data.data) break;
 
-            // nếu bị rate limit
-            if (err.response && err.response.status === 429) {
-                console.log("⛔ 429 → nghỉ 5s");
-                await sleep(5000);
-            } else {
-                await sleep(2000);
-            }
+            const filtered = data.data
+                .filter(s => s.playing > 0 && s.playing < s.maxPlayers)
+                .filter(s => !usedServers.has(s.id))
+                .map(s => ({
+                    id: s.id,
+                    players: s.playing,
+                    maxPlayers: s.maxPlayers
+                }));
+
+            servers.push(...filtered);
+
+            if (!data.nextPageCursor) break;
+            cursor = data.nextPageCursor;
         }
-    }
 
-    return null;
+        // ưu tiên server ít người
+        servers.sort((a, b) => a.players - b.players);
+
+        return servers;
+
+    } catch (err) {
+        console.log("❌ Lỗi:", err.message);
+        return [];
+    }
 }
 
-async function getServer() {
-    console.log("⚡ Đang lấy server...");
+async function main() {
+    while (true) {
+        let servers = await scanServers();
 
-    const data = await fetchServer();
+        if (servers.length === 0) {
+            console.log("⚠️ Không có server, thử lại...");
+            await new Promise(r => setTimeout(r, 5000));
+            continue;
+        }
 
-    if (!data || !data.data || data.data.length === 0) {
-        console.log("❌ Không có data, thử lại...");
-        return;
+        let target = servers[0];
+
+        console.log(`🎯 Chọn server: ${target.id} (${target.players}/${target.maxPlayers})`);
+
+        usedServers.add(target.id);
+
+        // lưu JSON
+        fs.writeFileSync("server.json", JSON.stringify(target, null, 2));
+
+        console.log("📄 Đã lưu server.json");
+
+        // delay trước khi hop tiếp
+        await new Promise(r => setTimeout(r, 8000));
     }
-
-    // lấy server random
-    const available = data.data.filter(s => s.playing < s.maxPlayers);
-
-    if (available.length === 0) {
-        console.log("❌ Không có server trống");
-        return;
-    }
-
-    const server = available[Math.floor(Math.random() * available.length)];
-
-    fs.writeFileSync("server.json", JSON.stringify({
-        id: server.id,
-        players: server.playing,
-        maxPlayers: server.maxPlayers
-    }, null, 2));
-
-    console.log("🔥 SERVER:", server.id, `(${server.playing}/${server.maxPlayers})`);
 }
 
-// chạy an toàn
-setInterval(getServer, 7000);
-getServer();
+main();
